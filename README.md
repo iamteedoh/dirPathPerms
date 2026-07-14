@@ -1,6 +1,6 @@
 [![GitHub Sponsors](https://img.shields.io/badge/Sponsor-GitHub-ea4aaa?logo=github)](https://github.com/sponsors/iamteedoh) [![Patreon](https://img.shields.io/badge/Support-Patreon-f96854?logo=patreon)](https://patreon.com/iamteedoh) [![Buy Me a Coffee](https://img.shields.io/badge/Buy%20Me%20a%20Coffee-FFDD00?logo=buymeacoffee&logoColor=black)](https://buymeacoffee.com/iamteedoh)
 
-# dirPathsPerms
+# dirPathPerms
 
 # File Permission Checker Script
 
@@ -35,7 +35,10 @@ This script is useful for:
 
 * A Bash-compatible shell (standard on most Linux distributions and macOS).
 * Standard Unix/Linux command-line utilities, specifically:
-    * `stat` (used for retrieving file status, including permissions).
+    * GNU `stat` (used for retrieving file status, including permissions). The
+      script calls `stat -c '%A'`, which is GNU coreutils syntax — standard on
+      Linux. On macOS/BSD, install GNU coreutils and make sure its `stat` comes
+      first on your `PATH` (for Homebrew, the `gnubin` directory).
     * `read`, `echo`, `printf` (standard shell built-ins).
 
 ## Installation
@@ -88,7 +91,7 @@ Let's say you want to check if members of the owning **Group** have **Write** ac
 
 * `/etc/passwd ` : `-rw-r--r--` (Owner: rw, Group: r, Other: r)
 * `/home/user/important_script.sh` : `-rwxr-x---` (Owner: rwx, Group: rx, Other: ---)
-* `/var/log/app.log` : `-rw-wr----` (Owner: rw, Group: rw, Other: ---)
+* `/var/log/app.log` : `-rw-rw----` (Owner: rw, Group: rw, Other: ---)
 * `/tmp` : `drwxrwxrwt` (Owner: rwx, Group: rwx, Other: rwt - sticky bit)
 * `/non/existent/path` : Does not exist
 * `/data/shared_folder` : `drwxrwx---` (Owner: rwx, Group: rwx, Other: ---)
@@ -148,6 +151,14 @@ Skipping: /non/existent/path (Not a file or directory)
 
 ## License
 
-This script is provided as-is. You can consider it under the MIT License or use it freely as needed.
+This project is licensed under the [GNU General Public License v3](LICENSE).
 
-This `README.md` file covers the script's purpose, usage, input/output details, and provides a clear example to help users understand how to use it effectively.
+## Contributing
+
+Contributions are welcome — see [CONTRIBUTING.md](CONTRIBUTING.md) for local
+setup, the validation suite, and the pull request process.
+
+## Security
+
+Please report vulnerabilities privately as described in
+[SECURITY.md](SECURITY.md), not through public issues.

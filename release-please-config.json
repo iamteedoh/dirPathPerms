@@ -1,0 +1,11 @@
+{
+  "$schema": "https://raw.githubusercontent.com/googleapis/release-please/main/schemas/config.json",
+  "release-type": "simple",
+  "bump-minor-pre-major": true,
+  "bootstrap-sha": "b5fe6230d5f86481eb76d4dad58e174f4cfa3c2d",
+  "packages": {
+    ".": {
+      "package-name": "dirPathPerms"
+    }
+  }
+}
