@@ -151,7 +151,7 @@ run_case "absolute path containing a literal space" \
   "$FIX/my file.txt\n" "YES"
 
 run_case "missing path is still reported as skipped" \
-  "/no/such/path/anywhere\n" "SKIP (path does not exist)"
+  "/no/such/path/anywhere\n" "does not exist"
 
 # ---------------------------------------------------------------------------
 # DIR-2: the spellings that used to be reported as nonexistent.
@@ -217,7 +217,7 @@ refute_case "command substitution is not executed" \
   "/tmp/\$(id -un)\n" "$(id -un)/"
 
 run_case "command substitution is left literal" \
-  "/tmp/\$(id -un)\n" 'SKIP (path does not exist)'
+  "/tmp/\$(id -un)\n" 'does not exist'
 
 refute_case "backticks are not executed" \
   "/tmp/\`id -un\`\n" "$(id -un)"
@@ -266,6 +266,68 @@ run_argv_case "--file and --path together is refused" \
 
 run_argv_case "--path with no value is refused" \
   "requires a value" --path
+
+# ---------------------------------------------------------------------------
+# DIR-3: the results table.
+# ---------------------------------------------------------------------------
+run_argv_case "the table has a Path header" \
+  "Path" --path "$FIX/plain.txt" --who owner --perm read
+
+run_argv_case "the table names the class it checked" \
+  "Owner" --path "$FIX/plain.txt" --who owner --perm read
+
+run_argv_case "the table has a Mode column showing the real mode" \
+  "-rw-r--r--" --path "$FIX/plain.txt" --who owner --perm read
+
+run_argv_case "the table is bordered" \
+  "├" --path "$FIX/plain.txt" --who owner --perm read
+
+run_argv_case "--who all gives a column per class" \
+  "Group" --path "$FIX/plain.txt" --who all --perm read
+
+# --perm all: the matrix layout.
+run_argv_case "--perm all is accepted" \
+  "read/write/execute" --path "$FIX/plain.txt" --who owner --perm all
+
+run_argv_case "--perm all gives an R/W/X sub-header" \
+  "R   W   X" --path "$FIX/plain.txt" --who owner --perm all
+
+run_argv_case "--perm all marks a granted permission" \
+  "✓" --path "$FIX/plain.txt" --who owner --perm all
+
+run_argv_case "--perm all reports a matrix summary" \
+  "permission checks granted" --path "$FIX/plain.txt" --who all --perm all
+
+run_argv_case "-p a is accepted as an alias for --perm all" \
+  "read/write/execute" --path "$FIX/plain.txt" -w owner -p a
+
+# A path whose columns must line up regardless of the locale: ${#s} counts
+# bytes outside a UTF-8 locale, which would skew the border widths.
+run_argv_case "a missing row still renders its placeholder" \
+  "does not exist" --path "/no/such/path" --who all --perm all
+
+# ---------------------------------------------------------------------------
+# DIR-3: telling a list of paths from a path that happens to be a file.
+# ---------------------------------------------------------------------------
+run_argv_case "a regular file that is not a list is checked, not parsed" \
+  "-rw-r--r--" --who owner --perm read /etc/passwd
+
+refute_case_passwd_parsed() {
+  local out
+  out=$("$SCRIPT" --no-color --who owner --perm read /etc/passwd 2>&1)
+  if [[ "$out" != *"root:"* ]]; then
+    printf '  %sPASS%s  %s\n' "$T_GREEN" "$T_RESET" "/etc/passwd contents are not read as paths"
+    pass=$((pass + 1))
+  else
+    printf '  %sFAIL%s  %s\n' "$T_RED" "$T_RESET" "/etc/passwd contents are not read as paths"
+    printf '        the file was parsed as a list of paths\n'
+    fail=$((fail + 1))
+  fi
+}
+refute_case_passwd_parsed
+
+run_argv_case "--file still forces list reading" \
+  "does not exist" --file /etc/passwd --who owner --perm read
 
 # ---------------------------------------------------------------------------
 # The interactive surface needs a real terminal, so it lives in a pty harness.

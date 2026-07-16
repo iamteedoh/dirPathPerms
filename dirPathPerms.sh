@@ -22,11 +22,19 @@ setup_colors() {
   if [[ "$USE_COLOR" == "no" || -n "${NO_COLOR:-}" || ! -t 1 ]]; then
     BOLD="" DIM="" RED="" GREEN="" YELLOW="" CYAN="" MAGENTA="" RESET=""
     RL_S="" RL_E=""
+    STRIPE="" FG_RESET="" ROW_END=""
   else
     BOLD=$'\e[1m'      DIM=$'\e[2m'
     RED=$'\e[1;31m'    GREEN=$'\e[1;32m'  YELLOW=$'\e[1;33m'
     MAGENTA=$'\e[1;35m' CYAN=$'\e[1;36m'
     RESET=$'\e[0m'
+    # Zebra striping for the results table. A row sets STRIPE once and closes
+    # with ROW_END; anything colored inside it must return to the default
+    # foreground with FG_RESET rather than RESET, which would also drop the
+    # row's background colour partway along the line.
+    STRIPE=$'\e[48;5;236m'
+    FG_RESET=$'\e[22;39m'
+    ROW_END=$'\e[0m'
     # Readline's non-printing markers. A `read -e` prompt must wrap its escape
     # sequences in these or readline counts them as visible characters and puts
     # the cursor in the wrong column as soon as a line is recalled or edited.
@@ -73,11 +81,14 @@ ${BOLD}USAGE${RESET}
   dirPathPerms.sh [OPTIONS] [PATH|FILE]
 
 Checks the paths you name directly, or every path listed in an input file.
-A bare argument is read as a list of paths when it is a regular file, and
-checked directly when it is a directory.
+A bare argument is read as a list of paths when it looks like one (its first
+meaningful line is a path); otherwise it is the path to check.
 
-Runs interactively when a required value is missing and a terminal is
-attached; runs non-interactively when everything is supplied via flags.
+With no arguments it runs as a session: it keeps asking for paths, with
+arrow-key recall, until you press q. Runs non-interactively, checking once
+and exiting, when everything is supplied via flags.
+
+Results are printed as a table of one row per path.
 
 ${BOLD}OPTIONS${RESET}
   -P, --path PATH     Check PATH directly. Repeatable. Use this instead of
@@ -86,18 +97,23 @@ ${BOLD}OPTIONS${RESET}
                       lines starting with '#' are ignored.
   -w, --who WHO       Whose permission to check: owner|group|other
                       (aliases: u|g|o).
-  -p, --perm PERM     Permission to check: read|write|execute (aliases: r|w|x).
+  -p, --perm PERM     Permission to check: read|write|execute|all
+                      (aliases: r|w|x|a). 'all' checks read, write and execute
+                      together.
   -a, --all           Check owner, group AND other at once (permission matrix).
       --no-color      Disable colored output.
   -h, --help          Show this help and exit.
   -V, --version       Print the version and exit.
 
 ${BOLD}EXAMPLES${RESET}
-  # Fully interactive (prompts for the path, who, and permission)
+  # Interactive session: asks for paths until you press q
   dirPathPerms.sh
 
   # Check one path directly
   dirPathPerms.sh --path ~/Documents --who owner --perm read
+
+  # The full picture: every permission, for every class
+  dirPathPerms.sh --path ~/Documents --all --perm all
 
   # A bare path works the same way
   dirPathPerms.sh -w owner -p r ~/Documents
@@ -284,6 +300,32 @@ normalize_path() {
   unescape "$NORM_PATH"
 }
 
+# A regular file given where a path was expected is ambiguous: it may be the
+# path to check, or a file listing paths to check. Decide by reading it. A list
+# of paths contains paths, so its first meaningful line starts with /, ~ or $.
+# Anything else — /etc/passwd, a binary, prose — is the path to check itself.
+# Only --file forces the list reading unconditionally.
+looks_like_path_list() {
+  local line seen=0
+  [[ -s "$1" ]] || return 1
+  while IFS= read -r line || [[ -n "$line" ]]; do
+    trim_ws "$line"
+    line="$NORM_PATH"
+    # The tilde below is a literal being matched, not a path for this shell to
+    # expand, which is what SC2088 warns about.
+    # shellcheck disable=SC2088
+    case "$line" in
+      '' | '#'*) ;;
+      /* | '~'* | '$'*) return 0 ;;
+      *) return 1 ;;
+    esac
+    # Give up rather than read a whole binary looking for a path.
+    seen=$((seen + 1))
+    (( seen > 20 )) && return 1
+  done < "$1"
+  return 1
+}
+
 # Resolve one raw line to the path that should be checked. Normalization is a
 # convenience, so when the normalized form does not exist but the raw line
 # does, the raw line wins: a file whose name genuinely contains a tilde, dollar
@@ -312,13 +354,14 @@ normalize_who() {
   esac
 }
 
-perm=""      # r | w | x
+perm=""      # r | w | x | all
 perm_text=""
 normalize_perm() {
   case "$(lc "$1")" in
     read|r)         perm="r"; perm_text="read" ;;
     write|w)        perm="w"; perm_text="write" ;;
     execute|exec|x) perm="x"; perm_text="execute" ;;
+    all|a)          perm="all"; perm_text="read/write/execute" ;;
     *) return 1 ;;
   esac
 }
@@ -339,33 +382,52 @@ prompt_file() {
   emsg "  ~/Documents                  a path — checked directly"
   emsg "  /location/of/myPaths.txt     a text file, one path per line"
   emsg ""
-  wrap_text >&2 <<< "Absolute paths are required if the script runs from another location. A leading ~ and any \$VAR are expanded for you. Use the up and down arrows to recall anything you have already typed this session."
+  wrap_text >&2 <<< "Absolute paths are required if the script runs from another location. A leading ~ and any \$VAR are expanded for you. Use the up and down arrows to recall anything you have already typed this session, and press q to quit."
 
+  prompt_next
+}
+
+# Ask for one path or list file. Returns 1 when the user asks to quit, which
+# ends the session rather than the whole script.
+prompt_next() {
   local reply candidate
+
+  # Each round replaces the previous entry rather than adding to it.
+  file_path=""
+  direct_paths=()
+
   while true; do
-    if ! read -e -p "${RL_S}${BOLD}${RL_E}Path or list file:${RL_S}${RESET}${RL_E} " -r reply; then
+    if ! read -e -p "${RL_S}${BOLD}${RL_E}Path or list file${RL_S}${DIM}${RL_E} (q to quit)${RL_S}${RESET}${BOLD}${RL_E}:${RL_S}${RESET}${RL_E} " -r reply; then
+      # Ctrl-D reads as end of input, which means the same thing as q.
       emsg ""
-      exit 2
+      return 1
     fi
+
+    case "$(lc "$reply")" in
+      q | quit | exit) return 1 ;;
+    esac
+
     [[ -n "$reply" ]] && history -s "$reply"
 
     resolve_path "$reply"
     candidate="$NORM_PATH"
 
-    # A regular file is read as a list of paths, which is this tool's original
-    # mode. A directory cannot be a list, so it is the path to check itself.
     if [[ -f "$candidate" ]]; then
-      file_path="$candidate"
-      return
+      if looks_like_path_list "$candidate"; then
+        file_path="$candidate"
+      else
+        direct_paths=("$candidate")
+      fi
+      return 0
     fi
     if [[ -e "$candidate" ]]; then
       direct_paths=("$candidate")
-      return
+      return 0
     fi
 
     emsg ""
     if [[ -z "$candidate" ]]; then
-      emsg "${RED}Nothing entered.${RESET} Type a path, or Ctrl-C to quit."
+      emsg "${RED}Nothing entered.${RESET} Type a path, or q to quit."
     else
       emsg "${RED}No such path:${RESET} $candidate"
     fi
@@ -388,85 +450,233 @@ prompt_who() {
 prompt_perm() {
   while true; do
     emsg ""
-    printf '%sCheck for (R)ead, (W)rite, or e(X)ecute permission?%s ' \
+    printf '%sCheck for (R)ead, (W)rite, e(X)ecute, or (A)ll permissions?%s ' \
       "$BOLD" "$RESET" >&2
     read -r reply
     if normalize_perm "$reply"; then
       break
     fi
-    emsg "${RED}Invalid choice.${RESET} Enter R, W, or X."
+    emsg "${RED}Invalid choice.${RESET} Enter R, W, X, or A."
   done
 }
 
 # ---------------------------------------------------------------------------
-# Does the 3-char class field (e.g. "rwx" or "r-x") grant $perm?
+# Does the 3-char class field (e.g. "rwx" or "r-x") grant permission $2?
 # ---------------------------------------------------------------------------
-has_perm() { [[ "$1" == *"$perm"* ]]; }
+has_perm() { [[ "$1" == *"$2"* ]]; }
+
+# The 3-char field a class owns within a 10-char mode string.
+class_field() {
+  case "$2" in
+    u) printf '%s' "${1:1:3}" ;;
+    g) printf '%s' "${1:4:3}" ;;
+    o) printf '%s' "${1:7:3}" ;;
+  esac
+}
+
+class_label() {
+  case "$1" in
+    u) printf 'Owner' ;;
+    g) printf 'Group' ;;
+    o) printf 'Other' ;;
+  esac
+}
 
 # ---------------------------------------------------------------------------
-# The check loop.
+# Results for the current table. Parallel arrays, one entry per checked path.
+# Checking and rendering are kept apart so that the table can size its columns
+# to the widest value it is about to print.
 # ---------------------------------------------------------------------------
-granted=0
-denied=0
-skipped=0
-total=0
+ROW_PATH=()
+ROW_MODE=()   # 10-char mode string, empty when there is nothing to report
+ROW_NOTE=()   # why a row has no mode
 
-# Check one raw entry — a line from the input file, or a --path value — and
-# print its verdict. Tallies land in the counters above.
-check_one_raw() {
-  local path perms owner_perm group_perm other_perm current
-  local badge_u badge_g badge_o
+reset_rows() { ROW_PATH=(); ROW_MODE=(); ROW_NOTE=(); }
 
+# Resolve one raw entry and record what was found.
+record_path() {
+  local path mode
   resolve_path "$1"
   path="$NORM_PATH"
 
   if [[ ! -e "$path" ]]; then
-    printf '%s  %-44s  SKIP (path does not exist)%s\n' \
-      "$YELLOW" "$path" "$RESET"
-    skipped=$((skipped + 1))
+    ROW_PATH+=("$path"); ROW_MODE+=(""); ROW_NOTE+=("does not exist")
     return
   fi
-
-  perms=$(mode_string "$path")
-  if [[ -z "$perms" ]]; then
-    printf '%s  %-44s  SKIP (could not read mode)%s\n' \
-      "$YELLOW" "$path" "$RESET"
-    skipped=$((skipped + 1))
+  mode=$(mode_string "$path")
+  if [[ -z "$mode" ]]; then
+    ROW_PATH+=("$path"); ROW_MODE+=(""); ROW_NOTE+=("mode unreadable")
     return
   fi
+  ROW_PATH+=("$path"); ROW_MODE+=("$mode"); ROW_NOTE+=("")
+}
 
-  owner_perm=${perms:1:3}
-  group_perm=${perms:4:3}
-  other_perm=${perms:7:3}
-  total=$((total + 1))
+# Which classes and permissions get columns.
+display_classes=()
+display_perms=()
+setup_columns() {
+  if [[ "$who" == "all" ]]; then display_classes=(u g o); else display_classes=("$who"); fi
+  if [[ "$perm" == "all" ]]; then display_perms=(r w x); else display_perms=("$perm"); fi
+}
 
-  if [[ "$who" == "all" ]]; then
-    # Permission matrix: show the requested permission per class.
-    if has_perm "$owner_perm"; then badge_u="${GREEN}u+${RESET}"; granted=$((granted + 1)); else badge_u="${RED}u-${RESET}"; fi
-    if has_perm "$group_perm"; then badge_g="${GREEN}g+${RESET}"; granted=$((granted + 1)); else badge_g="${RED}g-${RESET}"; fi
-    if has_perm "$other_perm"; then badge_o="${GREEN}o+${RESET}"; granted=$((granted + 1)); else badge_o="${RED}o-${RESET}"; fi
-    printf '  %-44s  %s %s %s   %s[%s %s %s]%s\n' \
-      "$path" "$badge_u" "$badge_g" "$badge_o" \
-      "$DIM" "$owner_perm" "$group_perm" "$other_perm" "$RESET"
-    return
+# ---------------------------------------------------------------------------
+# Table rendering.
+# ---------------------------------------------------------------------------
+
+# A run of $2 copies of $1, built without a loop.
+hbar() {
+  local s
+  printf -v s '%*s' "$2" ''
+  printf '%s' "${s// /$1}"
+}
+
+# $1 centered within $3 columns, where $2 is how many columns $1 occupies on
+# screen. The width is passed in rather than measured because ${#s} counts bytes
+# outside a UTF-8 locale, which would silently skew every border once a
+# multi-byte glyph appears in a cell.
+center_w() {
+  local text="$1" cols="$2" width="$3" pad_l pad_r
+  if (( cols >= width )); then printf '%s' "$text"; return; fi
+  pad_l=$(( (width - cols) / 2 ))
+  pad_r=$(( width - cols - pad_l ))
+  printf '%*s%s%*s' "$pad_l" '' "$text" "$pad_r" ''
+}
+
+# $1 centered within $2 columns. ASCII only — see center_w.
+center() { center_w "$1" "${#1}" "$2"; }
+
+# Render every recorded row as a bordered table with headers. Adjacent rows get
+# alternating backgrounds so that a long list stays readable.
+render_table() {
+  local n=${#ROW_PATH[@]}
+  local pathw=4 modew=4 classw i s c p
+  local mode field cell stripe
+
+  (( n == 0 )) && return
+
+  for (( i = 0; i < n; i++ )); do
+    s="${ROW_PATH[$i]}"
+    (( ${#s} > pathw )) && pathw=${#s}
+    s="${ROW_MODE[$i]}"
+    [[ -z "$s" ]] && s="${ROW_NOTE[$i]}"
+    (( ${#s} > modew )) && modew=${#s}
+  done
+
+  # One cell per class, or three when every permission is being shown.
+  if [[ "$perm" == "all" ]]; then classw=13; else classw=7; fi
+
+  # ── borders ──
+  rule() {
+    local left="$1" mid="$2" right="$3" out
+    out="$left$(hbar '─' $((pathw + 2)))"
+    for c in ${display_classes[@]+"${display_classes[@]}"}; do
+      out="$out$mid$(hbar '─' "$classw")"
+    done
+    out="$out$mid$(hbar '─' $((modew + 2)))$right"
+    printf '%s\n' "$out"
+  }
+
+  rule '┌' '┬' '┐'
+
+  # ── header ──
+  # With every permission shown, the class name spans its three cells and a
+  # second header row names them.
+  if [[ "$perm" == "all" ]]; then
+    s="│ $(center '' "$pathw") │"
+    for c in ${display_classes[@]+"${display_classes[@]}"}; do
+      s="$s$(center "$(class_label "$c")" "$classw")│"
+    done
+    s="$s$(center '' $((modew + 2)))│"
+    printf '%s%s%s\n' "$BOLD" "$s" "$RESET"
   fi
 
-  case "$who" in
-    u) current=$owner_perm ;;
-    g) current=$group_perm ;;
-    o) current=$other_perm ;;
-  esac
+  s="│ $(printf '%-*s' "$pathw" 'Path') │"
+  for c in ${display_classes[@]+"${display_classes[@]}"}; do
+    if [[ "$perm" == "all" ]]; then
+      s="$s$(center 'R   W   X' "$classw")│"
+    else
+      s="$s$(center "$(class_label "$c")" "$classw")│"
+    fi
+  done
+  s="$s $(printf '%-*s' "$modew" 'Mode') │"
+  printf '%s%s%s\n' "$BOLD" "$s" "$RESET"
 
-  if has_perm "$current"; then
-    printf '%s  %-44s  YES%s   %s[owner %s | group %s | other %s]%s\n' \
-      "$GREEN" "$path" "$RESET" \
-      "$DIM" "$owner_perm" "$group_perm" "$other_perm" "$RESET"
-    granted=$((granted + 1))
+  rule '├' '┼' '┤'
+
+  # ── rows ──
+  for (( i = 0; i < n; i++ )); do
+    # Alternate the background so neighbouring rows never look alike.
+    if (( i % 2 == 1 )); then stripe="$STRIPE"; else stripe=""; fi
+    mode="${ROW_MODE[$i]}"
+
+    printf '%s' "$stripe"
+    printf '│ %-*s │' "$pathw" "${ROW_PATH[$i]}"
+
+    for c in ${display_classes[@]+"${display_classes[@]}"}; do
+      if [[ -z "$mode" ]]; then
+        # Nothing was readable, so no cell can claim anything.
+        printf '%s%s%s│' "$DIM" "$(center_w '—' 1 "$classw")" "$FG_RESET"
+        continue
+      fi
+      field=$(class_field "$mode" "$c")
+      if [[ "$perm" == "all" ]]; then
+        # Built with literal spacing rather than centered, so the glyphs line up
+        # under the R/W/X header without depending on how wide the shell thinks
+        # a check mark is.
+        cell=""
+        for p in ${display_perms[@]+"${display_perms[@]}"}; do
+          [[ -n "$cell" ]] && cell="$cell   "
+          if has_perm "$field" "$p"; then
+            cell="$cell${GREEN}✓${FG_RESET}"
+          else
+            cell="$cell${DIM}·${FG_RESET}"
+          fi
+        done
+        printf '  %s  │' "$cell"
+      else
+        if has_perm "$field" "$perm"; then
+          printf '%s%s%s│' "$GREEN" "$(center 'YES' "$classw")" "$FG_RESET"
+        else
+          printf '%s%s%s│' "$RED" "$(center 'NO' "$classw")" "$FG_RESET"
+        fi
+      fi
+    done
+
+    if [[ -n "$mode" ]]; then
+      printf ' %s%-*s%s │' "$DIM" "$modew" "$mode" "$FG_RESET"
+    else
+      printf ' %s%-*s%s │' "$YELLOW" "$modew" "${ROW_NOTE[$i]}" "$FG_RESET"
+    fi
+    printf '%s\n' "$ROW_END"
+  done
+
+  rule '└' '┴' '┘'
+}
+
+# The tally under the table.
+render_summary() {
+  local n=${#ROW_PATH[@]}
+  local i c p mode field
+  local checked=0 skipped=0 cells=0 granted=0 denied=0
+
+  for (( i = 0; i < n; i++ )); do
+    mode="${ROW_MODE[$i]}"
+    if [[ -z "$mode" ]]; then skipped=$((skipped + 1)); continue; fi
+    checked=$((checked + 1))
+    for c in ${display_classes[@]+"${display_classes[@]}"}; do
+      field=$(class_field "$mode" "$c")
+      for p in ${display_perms[@]+"${display_perms[@]}"}; do
+        cells=$((cells + 1))
+        if has_perm "$field" "$p"; then granted=$((granted + 1)); else denied=$((denied + 1)); fi
+      done
+    done
+  done
+
+  emsg ""
+  if (( ${#display_classes[@]} == 1 && ${#display_perms[@]} == 1 )); then
+    emsg "${BOLD}Summary:${RESET} ${GREEN}${granted} granted${RESET}, ${RED}${denied} denied${RESET}, ${YELLOW}${skipped} skipped${RESET} (${checked} checked)."
   else
-    printf '%s  %-44s  NO  (no %s for %s)%s   %s[owner %s | group %s | other %s]%s\n' \
-      "$RED" "$path" "$perm_text" "$who_text" "$RESET" \
-      "$DIM" "$owner_perm" "$group_perm" "$other_perm" "$RESET"
-    denied=$((denied + 1))
+    emsg "${BOLD}Summary:${RESET} ${checked} path(s) checked, ${YELLOW}${skipped} skipped${RESET} — ${GREEN}${granted}${RESET} of ${cells} permission checks granted."
   fi
 }
 
@@ -476,6 +686,8 @@ check_one_raw() {
 # ---------------------------------------------------------------------------
 run_checks() {
   local line source_label
+
+  reset_rows
 
   if [[ ${#direct_paths[@]} -eq 1 ]]; then
     resolve_path "${direct_paths[0]}"
@@ -491,7 +703,7 @@ run_checks() {
 
   if [[ ${#direct_paths[@]} -gt 0 ]]; then
     for line in ${direct_paths[@]+"${direct_paths[@]}"}; do
-      check_one_raw "$line"
+      record_path "$line"
     done
   else
     while IFS= read -r line || [[ -n "$line" ]]; do
@@ -503,16 +715,12 @@ run_checks() {
       case "$line" in
         '' | '#'*) continue ;;
       esac
-      check_one_raw "$line"
+      record_path "$line"
     done < "$file_path"
   fi
 
-  emsg ""
-  if [[ "$who" == "all" ]]; then
-    emsg "${BOLD}Summary:${RESET} ${total} path(s) checked, ${skipped} skipped — ${GREEN}${granted}${RESET} class-grants of ${perm_text}."
-  else
-    emsg "${BOLD}Summary:${RESET} ${GREEN}${granted} granted${RESET}, ${RED}${denied} denied${RESET}, ${YELLOW}${skipped} skipped${RESET} (${total} checked)."
-  fi
+  render_table
+  render_summary
 }
 
 # ---------------------------------------------------------------------------
@@ -520,6 +728,7 @@ run_checks() {
 # ---------------------------------------------------------------------------
 file_path=""
 direct_paths=()
+session=0
 main() {
   local positional="" candidate
   while [[ $# -gt 0 ]]; do
@@ -536,7 +745,7 @@ main() {
         shift 2 ;;
       -p|--perm)
         [[ $# -ge 2 ]] || { setup_colors; emsg "Option $1 requires a value."; exit 2; }
-        if ! normalize_perm "$2"; then setup_colors; emsg "Invalid --perm value: $2 (use read|write|execute)."; exit 2; fi
+        if ! normalize_perm "$2"; then setup_colors; emsg "Invalid --perm value: $2 (use read|write|execute|all)."; exit 2; fi
         shift 2 ;;
       -a|--all)      who="all"; who_text="All"; shift ;;
       --no-color)    USE_COLOR="no"; shift ;;
@@ -561,12 +770,12 @@ main() {
     exit 2
   fi
 
-  # A bare argument is whichever it turns out to be: a regular file is read as
-  # a list of paths, and anything else that exists is a path to check.
+  # A bare argument is whichever it turns out to be: a file that reads like a
+  # list of paths is one, and anything else that exists is a path to check.
   if [[ -z "$file_path" && ${#direct_paths[@]} -eq 0 && -n "$positional" ]]; then
     resolve_path "$positional"
     candidate="$NORM_PATH"
-    if [[ -f "$candidate" ]]; then
+    if [[ -f "$candidate" ]] && looks_like_path_list "$candidate"; then
       file_path="$candidate"
     elif [[ -e "$candidate" ]]; then
       direct_paths=("$candidate")
@@ -578,8 +787,14 @@ main() {
   # Fill in whatever wasn't provided on the command line. Prompt only when a
   # terminal is attached; otherwise fail clearly (non-interactive contract).
   if [[ -z "$file_path" && ${#direct_paths[@]} -eq 0 ]]; then
-    if [[ -t 0 ]]; then prompt_file
-    else emsg "${RED}Nothing to check.${RESET} Pass --path PATH or --file FILE (see --help)."; exit 2; fi
+    if [[ -t 0 ]]; then
+      # Nothing was named on the command line, so this is a session: keep
+      # asking for paths until the user quits, rather than exiting after one.
+      session=1
+      prompt_file || { emsg "Nothing checked."; exit 0; }
+    else
+      emsg "${RED}Nothing to check.${RESET} Pass --path PATH or --file FILE (see --help)."; exit 2
+    fi
   elif [[ -n "$file_path" ]]; then
     # A quoted --file value reaches us unexpanded (e.g. --file '~/paths.txt'),
     # so the input file gets the same treatment as the paths listed inside it.
@@ -608,10 +823,20 @@ main() {
 
   if [[ -z "$perm" ]]; then
     if [[ -t 0 ]]; then prompt_perm
-    else emsg "${RED}No permission given.${RESET} Pass --perm read|write|execute (see --help)."; exit 2; fi
+    else emsg "${RED}No permission given.${RESET} Pass --perm read|write|execute|all (see --help)."; exit 2; fi
   fi
 
+  setup_columns
+
   run_checks
+  (( session == 0 )) && return 0
+
+  # Same question, same who/perm — only the paths change.
+  while prompt_next; do
+    run_checks
+  done
+  emsg ""
+  emsg "${DIM}Done.${RESET}"
 }
 
 main "$@"
