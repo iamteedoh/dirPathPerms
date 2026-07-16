@@ -19,6 +19,10 @@ into scripts and CI. When any required value is omitted and a terminal is
 attached, the script prompts for it; when nothing is attached (a pipe or CI
 job), it fails fast with a clear message instead of hanging.
 
+<p align="center">
+  <img src="assets/dirPathPerms_appThumbnail.png" alt="dirPathPerms banner and permission-check output" width="800">
+</p>
+
 ## Use Case
 
 This script is useful for:
