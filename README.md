@@ -10,14 +10,20 @@
 
 ## Overview
 
-This Bash script checks specific file or directory permissions (Owner, Group, or Other; Read, Write, or Execute) for the paths you give it — either named directly, or listed one per line in an input file. It provides clear, color-coded output indicating whether the specified permission is set for each path.
+This Bash script checks specific file or directory permissions (Owner, Group, or Other; Read, Write, or Execute) for the paths you give it — either named directly, or listed one per line in an input file. Results come back as a color-coded table, one row per path.
 
-It greets you with a big title banner and a short description, then runs either
-**interactively** — prompting for the input file and the permission to check —
-or **non-interactively** via command-line flags, which makes it easy to drop
-into scripts and CI. When any required value is omitted and a terminal is
-attached, the script prompts for it; when nothing is attached (a pipe or CI
-job), it fails fast with a clear message instead of hanging.
+It greets you with a big title banner and a short description, then runs in one
+of two modes:
+
+* **Interactively**, as a session: it asks for a path, shows the table, then
+  asks for the next one — with tab completion and arrow-key history — until you
+  press `q`.
+* **Non-interactively** via command-line flags, checking once and exiting, which
+  makes it easy to drop into scripts and CI.
+
+When a required value is omitted and a terminal is attached, the script prompts
+for it; when nothing is attached (a pipe or CI job), it fails fast with a clear
+message instead of hanging.
 
 <p align="center">
   <img src="assets/dirPathPerms_appThumbnail.png" alt="dirPathPerms banner and permission-check output" width="800">
@@ -39,12 +45,13 @@ This script is useful for:
   (`--path`/`--file`, `--who`, `--perm`) for scripting and CI.
 * **Check a path directly** with `--path` (repeatable) or a bare argument — no
   need to author a list file just to check one directory.
-* Checks permissions for files and directories listed in a specified input file.
+* **Audit many paths at once** from an input file, one path per line.
 * **Interactive session:** run it with no arguments and it keeps asking for
   paths until you press `q`, so checking ten paths does not mean launching it
   ten times.
-* **Command-line history:** the interactive prompt supports arrow-key recall and
-  full line editing, so a typo does not mean retyping the whole path.
+* **Tab completion and history:** the prompt completes paths with `Tab`, recalls
+  earlier entries with the up and down arrows, and supports the usual
+  line-editing keys — so a typo does not mean retyping the whole path.
 * **Results as a table:** one row per path, with headers and alternating row
   shading so adjacent rows stay easy to tell apart.
 * Allows checking for Owner (`u`), Group (`g`), or Other (`o`) permissions, or
@@ -52,21 +59,23 @@ This script is useful for:
 * Allows checking for Read (`r`), Write (`w`), or Execute (`x`) permissions, or
   **all three at once** with `--perm all`. Combine with `--all` for the full
   3×3 matrix of every permission against every class.
-* Interactive prompts guide the user to select the input file and the desired
-  permission check, and validate every choice.
+* Interactive prompts guide the user to choose what to check, and validate every
+  choice.
 * Clear, color-coded output:
     * **Green (`YES`)**: The specified permission is set.
     * **Red (`NO`)**: The specified permission is **not** set.
-* A **summary line** at the end with granted / denied / skipped counts.
-* Displays the full permission string (e.g., `owner rwx | group r-x | other r--`)
-  for context in the output.
+* A **summary line** with granted / denied / skipped counts, which switches to
+  counting individual permission checks when a matrix is shown.
+* A **`Mode` column** showing each path's actual mode (e.g. `-rw-r--r--`) for
+  context, or why there is no result.
 * **Comment & blank-line support:** lines in the input file that are empty or
   start with `#` are skipped, including indented ones.
 * **Forgiving path input:** a leading `~`, a `$VAR`, surrounding quotes,
   backslash-escaped spaces, stray indentation, and Windows (CRLF) line endings
   are all handled, so a path pasted out of Finder or a terminal just works.
   Paths are only ever expanded, never executed.
-* Gracefully handles and reports paths listed in the input file that do not exist.
+* Gracefully handles and reports paths that do not exist, rather than failing the
+  whole run.
 * **Cross-platform:** works with both GNU (`stat -c`) and BSD/macOS (`stat -f`)
   `stat`, so no GNU coreutils install is required on macOS.
 * Color is disabled automatically when output is piped or redirected, and can be
@@ -75,20 +84,35 @@ This script is useful for:
 
 ## Prerequisites
 
-* A Bash-compatible shell (standard on most Linux distributions and macOS).
+* **Bash 3.2 or newer** — the version macOS still ships, so nothing needs
+  installing there. Nothing in the script requires Bash 4+.
 * Standard Unix/Linux command-line utilities, specifically:
     * `stat` for retrieving file permissions. The script auto-detects GNU
       (`stat -c '%A'`) and BSD/macOS (`stat -f '%Sp'`) variants, so it works on
       Linux and macOS out of the box — no GNU coreutils install required.
     * `read`, `printf`, `tr` (standard shell built-ins / utilities).
+* Optional, and only for the extras:
+    * A **terminal** for the interactive session — tab completion, history, and
+      the prompts need one. Without a tty the script expects flags and exits
+      rather than hanging.
+    * `getent` (Linux) or `dscl` (macOS) to expand `~user` for *another* user.
+      Your own `~` needs neither.
 
 ## Installation
 
-1.  Save the script content to a file, for example, `dirPathPerms.sh`.
-2.  Make the script executable:
-    ```bash
-    chmod +x dirPathPerms.sh
-    ```
+It is a single self-contained script with no build step and no dependencies to
+install. Clone the repository, or download `dirPathPerms.sh` from the
+[latest release](https://github.com/iamteedoh/dirPathPerms/releases/latest),
+then make it executable:
+
+```bash
+git clone https://github.com/iamteedoh/dirPathPerms.git
+cd dirPathPerms
+chmod +x dirPathPerms.sh
+./dirPathPerms.sh --version
+```
+
+Put it somewhere on your `PATH` if you want it available everywhere.
 
 ## How to Run
 
@@ -102,15 +126,38 @@ many to audit at once.
 ./dirPathPerms.sh
 ```
 
-Run with no arguments it becomes a **session**:
+Run with no arguments, it becomes a **session**:
 
-* Enter **either** a path to check (`~/Documents`) **or** a file listing paths
-  to check (`myPaths.txt`) — see [how the two are told apart](#paths-vs-lists).
-* Choose whose permissions to check, and which permission to look for.
-* Read the results table, then **enter another path**. The script keeps asking,
-  reusing your answers, until you press **`q`**.
-* Use the **up and down arrows** to recall anything you have already typed this
-  session, and the usual line-editing keys to fix a typo.
+1. Enter **either** a path to check (`~/Documents`) **or** a file listing paths
+   to check (`myPaths.txt`) — see [how the two are told apart](#paths-vs-lists).
+2. Choose whose permissions to check, and which permission to look for.
+3. Read the results table, then **enter another path**. The script keeps asking,
+   reusing your answers from step 2, until you press **`q`**.
+
+### Editing keys at the prompt
+
+The path prompt is a full readline prompt, so it behaves like your shell does:
+
+| Key | Does |
+|---|---|
+| `Tab` | **Complete the path.** `~/Doc` → `~/Documents/`, `/etc/pass` → `/etc/passwd`. |
+| `↑` / `↓` | Recall anything you have already typed this session — handy after a typo. |
+| `Ctrl-A` / `Ctrl-E` | Jump to the start / end of the line. |
+| `Ctrl-W` | Delete the previous word. |
+| `Ctrl-U` | Clear the line. |
+| `Ctrl-R` | Reverse-search what you typed earlier. |
+| `q` | Quit the session. |
+
+Two things to expect from completion, which differ slightly from your shell:
+
+* When a prefix is **ambiguous** it fills in as far as the candidates agree and
+  then beeps — `/var/lo` becomes `/var/log` with `/var/log` and `/var/logs` both
+  present. It does not print the list of candidates.
+* Completion is reliable for paths starting with `/` or `~`, which is what this
+  tool wants anyway.
+
+Nothing is written to your shell history — the session's history lives and dies
+with the run.
 
 ### Non-interactive
 
@@ -143,6 +190,9 @@ scripts, cron jobs, and CI:
 Supplying everything via flags checks once and exits — no session loop — which
 is what makes it usable from cron and CI.
 
+If some (but not all) values are provided, the script prompts for the rest when
+a terminal is attached, or exits with a helpful error when one is not.
+
 <h3 id="paths-vs-lists">Paths vs. lists</h3>
 
 A bare argument might be the path you want to check, or a file listing paths to
@@ -154,9 +204,6 @@ for a list of paths.
 
 Use `--path` or `--file` when you want to say which you meant, instead of
 relying on the guess.
-
-If some (but not all) values are provided, the script prompts for the rest when
-a terminal is attached, or exits with a helpful error when one is not.
 
 ### Command-line options
 
@@ -284,6 +331,24 @@ Summary: 2 path(s) checked, 0 skipped — 11 of 18 permission checks granted.
 * **`—`**: no result to report for that class, because the mode could not be read.
 * **`Summary`**: a tally of granted / denied / skipped. When more than one class
   or permission is shown, it counts individual permission checks instead.
+
+## Exit codes
+
+| Code | Meaning |
+|---|---|
+| `0` | The check ran. **This includes runs where permissions were denied or paths were skipped.** |
+| `2` | The script could not run the check: an unknown option, a missing option value, no such input file, `--file` and `--path` combined, or nothing to check with no terminal to ask at. |
+
+> **Reporting a denial is a successful run.** A `NO` in the table does not
+> change the exit code, so `dirPathPerms.sh … || echo FAILED` will not fire on a
+> denied permission — only on a usage error. Scripts that need to act on the
+> result should read the output rather than the exit code:
+>
+> ```bash
+> # alert when the group can write to anything listed
+> ./dirPathPerms.sh --file paths.txt --who group --perm write --no-color \
+>   | grep -q ' YES ' && echo "group-writable paths found"
+> ```
 
 ## License
 
