@@ -5,7 +5,13 @@
   "bootstrap-sha": "b5fe6230d5f86481eb76d4dad58e174f4cfa3c2d",
   "packages": {
     ".": {
-      "package-name": "dirPathPerms"
+      "package-name": "dirPathPerms",
+      "extra-files": [
+        {
+          "type": "generic",
+          "path": "dirPathPerms.sh"
+        }
+      ]
     }
   },
   "include-component-in-tag": false
