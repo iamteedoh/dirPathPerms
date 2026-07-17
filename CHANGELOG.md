@@ -1,5 +1,18 @@
 # Changelog
 
+## [0.3.0](https://github.com/iamteedoh/dirPathPerms/compare/v0.2.0...v0.3.0) (2026-07-17)
+
+
+### Features
+
+* check paths directly, with tilde/variable expansion and prompt history ([#7](https://github.com/iamteedoh/dirPathPerms/issues/7)) ([c7f3389](https://github.com/iamteedoh/dirPathPerms/commit/c7f3389e016444d8cc681ebbd45c96b56d5753fb))
+* interactive session with tabular output ([#9](https://github.com/iamteedoh/dirPathPerms/issues/9)) ([e1d5e08](https://github.com/iamteedoh/dirPathPerms/commit/e1d5e0861aeedd5c0363fdbb5ace4c3dc66b7f59))
+
+
+### Bug Fixes
+
+* report the real version from --version ([#10](https://github.com/iamteedoh/dirPathPerms/issues/10)) ([0d87357](https://github.com/iamteedoh/dirPathPerms/commit/0d87357f74627f84e6825bfacc2022da032f3a55))
+
 ## [0.2.0](https://github.com/iamteedoh/dirPathPerms/compare/v0.1.0...v0.2.0) (2026-07-16)
 
 

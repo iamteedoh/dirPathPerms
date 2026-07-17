@@ -14,7 +14,7 @@ set -uo pipefail
 # Owned by release-please: the annotation is what makes it rewrite this line on
 # a release. Without it the constant never moves and --version quietly reports
 # whatever it was first set to.
-VERSION="0.2.0" # x-release-please-version
+VERSION="0.3.0" # x-release-please-version
 
 # ---------------------------------------------------------------------------
 # Colors. Disabled when --no-color / $NO_COLOR is set, or stdout is not a TTY
