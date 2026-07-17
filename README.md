@@ -10,7 +10,7 @@
 
 ## Overview
 
-This Bash script checks specific file or directory permissions (Owner, Group, or Other; Read, Write, or Execute) for a list of paths provided in an input file. It provides clear, color-coded output indicating whether the specified permission is set for each path.
+This Bash script checks specific file or directory permissions (Owner, Group, or Other; Read, Write, or Execute) for the paths you give it — either named directly, or listed one per line in an input file. It provides clear, color-coded output indicating whether the specified permission is set for each path.
 
 It greets you with a big title banner and a short description, then runs either
 **interactively** — prompting for the input file and the permission to check —
@@ -36,8 +36,12 @@ This script is useful for:
 
 * **Title banner:** prints a big ASCII title and a one-line description each run.
 * **Two run modes:** fully interactive prompts, or non-interactive with flags
-  (`--file`, `--who`, `--perm`) for scripting and CI.
+  (`--path`/`--file`, `--who`, `--perm`) for scripting and CI.
+* **Check a path directly** with `--path` (repeatable) or a bare argument — no
+  need to author a list file just to check one directory.
 * Checks permissions for files and directories listed in a specified input file.
+* **Command-line history:** the interactive prompt supports arrow-key recall and
+  full line editing, so a typo does not mean retyping the whole path.
 * Allows checking for Owner (`u`), Group (`g`), or Other (`o`) permissions, or
   **all three at once** with `--all` (a compact permission matrix).
 * Allows checking for Read (`r`), Write (`w`), or Execute (`x`) permissions.
@@ -50,7 +54,11 @@ This script is useful for:
 * Displays the full permission string (e.g., `owner rwx | group r-x | other r--`)
   for context in the output.
 * **Comment & blank-line support:** lines in the input file that are empty or
-  start with `#` are skipped.
+  start with `#` are skipped, including indented ones.
+* **Forgiving path input:** a leading `~`, a `$VAR`, surrounding quotes,
+  backslash-escaped spaces, stray indentation, and Windows (CRLF) line endings
+  are all handled, so a path pasted out of Finder or a terminal just works.
+  Paths are only ever expanded, never executed.
 * Gracefully handles and reports paths listed in the input file that do not exist.
 * **Cross-platform:** works with both GNU (`stat -c`) and BSD/macOS (`stat -f`)
   `stat`, so no GNU coreutils install is required on macOS.
@@ -77,9 +85,9 @@ This script is useful for:
 
 ## How to Run
 
-Create an input file containing the list of absolute paths you want to check
-(see [Input File Format](#input-file-format) below), then run the script in
-whichever mode suits you.
+You can either name the paths you want to check directly, or put them in an
+input file (see [Input File Format](#input-file-format) below) when you have
+many to audit at once.
 
 ### Interactive
 
@@ -89,10 +97,12 @@ whichever mode suits you.
 
 Follow the prompts:
 
-* Enter the path to your input file when prompted.
-* Choose whether to check permissions for Owner (`O`), Group (`G`), Other (`E`),
-  or All (`A`).
-* Choose whether to check for Read (`R`), Write (`W`), or Execute (`X`) permission.
+* Enter **either** a path to check (`~/Documents`) **or** a file listing paths
+  to check (`myPaths.txt`). A directory is checked directly; a regular file is
+  read as a list of paths.
+* Use the **up and down arrows** to recall anything you have already typed this
+  session, and the usual line-editing keys to fix a typo.
+* Choose whose permissions to check, and which permission to look for.
 
 The script processes each path and prints the results to the console.
 
@@ -102,15 +112,28 @@ Supply the values as flags and the script runs without prompting — ideal for
 scripts, cron jobs, and CI:
 
 ```bash
+# Check a single path directly
+./dirPathPerms.sh --path ~/Documents --who owner --perm read
+
+# A bare path works the same way
+./dirPathPerms.sh -w owner -p r ~/Documents
+
+# Several paths at once
+./dirPathPerms.sh -P /etc/passwd -P /var/log --who group --perm write
+
 # Does the group have write access to every listed path?
 ./dirPathPerms.sh --file paths.txt --who group --perm write
 
 # Show read access for owner/group/other across all paths, colors off
 ./dirPathPerms.sh --all --perm read --file paths.txt --no-color
 
-# The file can also be passed positionally
+# A list file can also be passed positionally
 ./dirPathPerms.sh -w owner -p x paths.txt
 ```
+
+A bare argument is read as a **list of paths** when it is a regular file, and
+**checked directly** when it is a directory. Use `--path` or `--file` when you
+want to be explicit.
 
 If some (but not all) values are provided, the script prompts for the rest when
 a terminal is attached, or exits with a helpful error when one is not.
@@ -119,6 +142,7 @@ a terminal is attached, or exits with a helpful error when one is not.
 
 | Option | Description |
 |---|---|
+| `-P`, `--path PATH` | Check `PATH` directly. Repeatable. Use instead of `--file` to check one or more paths without writing a list file. |
 | `-f`, `--file FILE` | Input file: one absolute path per line. Blank lines and `#` comments are ignored. |
 | `-w`, `--who WHO` | Whose permission to check: `owner`\|`group`\|`other` (aliases `u`\|`g`\|`o`). |
 | `-p`, `--perm PERM` | Permission to check: `read`\|`write`\|`execute` (aliases `r`\|`w`\|`x`). |
@@ -134,6 +158,28 @@ The input file should be a plain text file where **each line contains exactly on
 * **Absolute paths are required** to ensure the script can find the files/directories regardless of where the script itself is executed from.
 * **Blank lines and lines starting with `#` are ignored**, so you can annotate and space out the file freely.
 
+### How a path line is read
+
+Paths get written by hand and pasted out of file managers, so each line is
+tidied up before it is looked up. In order:
+
+| Written in the file | Checked as |
+|---|---|
+| `  /var/log  ` | `/var/log` — surrounding whitespace is trimmed |
+| `/var/log` + `CRLF` | `/var/log` — a Windows line ending is stripped |
+| `"/my file.txt"` or `'/my file.txt'` | `/my file.txt` — one surrounding pair of quotes is removed |
+| `/my\ file.txt` | `/my file.txt` — backslash escapes are resolved (this is what dragging a file from Finder into a terminal produces) |
+| `~/Documents` | `/Users/you/Documents` — a leading `~` expands to your home directory |
+| `~alice/Documents` | `alice`'s home directory |
+| `$HOME/Documents`, `${HOME}/Documents` | environment variables are expanded |
+
+Two guarantees worth knowing:
+
+* **Nothing is ever executed.** `$(...)` and backticks are left as literal text,
+  so an input file can only ever name files — it is data, never a script.
+* **A literal name always wins.** If a file's name genuinely contains a `~`,
+  `$`, quote, or backslash, it is still checked exactly as written.
+
 **Example Input File (`myPaths.txt`):**
 
 ```text
@@ -141,6 +187,10 @@ The input file should be a plain text file where **each line contains exactly on
 /etc/passwd
 /home/user/important_script.sh
 /var/log/app.log
+
+# your own files — ~ and $VAR work too
+~/Documents/notes.txt
+$HOME/.ssh/id_ed25519
 
 /tmp
 /non/existent/path

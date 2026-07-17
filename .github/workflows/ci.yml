@@ -32,6 +32,9 @@ jobs:
       - name: Check Bash syntax
         run: git ls-files '*.sh' | xargs -n1 bash -n
 
+      - name: Run the test suite
+        run: ./tests/run_tests.sh
+
   secrets:
     name: Secret scan
     runs-on: ubuntu-latest

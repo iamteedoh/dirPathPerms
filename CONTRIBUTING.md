@@ -12,10 +12,13 @@ validation, and the pull request process.
 
 ## Prerequisites
 
-- Bash (the script targets `#!/bin/bash`)
-- GNU coreutils `stat` (`stat -c '%A'`) to run the script itself — standard on
-  Linux; on macOS install coreutils or run inside a Linux environment
+- Bash (the script targets `#!/usr/bin/env bash` and runs on the Bash 3.2 that
+  ships with macOS, so avoid Bash 4+ only syntax)
+- `stat` — the script auto-detects the GNU (`stat -c '%A'`) and BSD/macOS
+  (`stat -f '%Sp'`) variants, so no coreutils install is needed on macOS
 - `shellcheck`
+- `python3` — only to run the interactive (pty) tests; they are skipped without
+  it, and the rest of the suite is pure Bash
 - gitleaks 8.30.1 or newer
 
 ## Set up from a clean clone
@@ -37,16 +40,23 @@ Run the same checks that protect `main`:
 ```bash
 git ls-files '*.sh' | xargs shellcheck
 git ls-files '*.sh' | xargs -n1 bash -n
+./tests/run_tests.sh
 gitleaks git . --config .gitleaks.toml --redact --no-banner
 ```
 
-When changing script behavior, exercise the interactive flow locally against a
-small sample paths file and confirm both the `YES`/`NO` output and the
-missing-path handling still work.
+`tests/run_tests.sh` drives the real CLI against generated fixtures and asserts
+the result for each path spelling an input file can contain. Add a case there
+for any change to how a path is read or resolved.
+
+It also invokes `tests/interactive_test.py`, which attaches the script to a
+pseudo-terminal to cover the prompt and its arrow-key history. Those behaviors
+only exist when a tty is attached, so they cannot be tested by piping input.
 
 ## Project layout
 
-- `dirPathPerms.sh` — the interactive permission checker script
+- `dirPathPerms.sh` — the permission checker script
+- `tests/run_tests.sh` — black-box test suite for the CLI
+- `tests/interactive_test.py` — pty tests for the interactive prompt
 - `.github/workflows/` — source validation and source-only release automation
 
 ## Pull request process
