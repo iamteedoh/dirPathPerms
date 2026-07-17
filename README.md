@@ -40,11 +40,18 @@ This script is useful for:
 * **Check a path directly** with `--path` (repeatable) or a bare argument — no
   need to author a list file just to check one directory.
 * Checks permissions for files and directories listed in a specified input file.
+* **Interactive session:** run it with no arguments and it keeps asking for
+  paths until you press `q`, so checking ten paths does not mean launching it
+  ten times.
 * **Command-line history:** the interactive prompt supports arrow-key recall and
   full line editing, so a typo does not mean retyping the whole path.
+* **Results as a table:** one row per path, with headers and alternating row
+  shading so adjacent rows stay easy to tell apart.
 * Allows checking for Owner (`u`), Group (`g`), or Other (`o`) permissions, or
-  **all three at once** with `--all` (a compact permission matrix).
-* Allows checking for Read (`r`), Write (`w`), or Execute (`x`) permissions.
+  **all three at once** with `--all`.
+* Allows checking for Read (`r`), Write (`w`), or Execute (`x`) permissions, or
+  **all three at once** with `--perm all`. Combine with `--all` for the full
+  3×3 matrix of every permission against every class.
 * Interactive prompts guide the user to select the input file and the desired
   permission check, and validate every choice.
 * Clear, color-coded output:
@@ -95,16 +102,15 @@ many to audit at once.
 ./dirPathPerms.sh
 ```
 
-Follow the prompts:
+Run with no arguments it becomes a **session**:
 
 * Enter **either** a path to check (`~/Documents`) **or** a file listing paths
-  to check (`myPaths.txt`). A directory is checked directly; a regular file is
-  read as a list of paths.
+  to check (`myPaths.txt`) — see [how the two are told apart](#paths-vs-lists).
+* Choose whose permissions to check, and which permission to look for.
+* Read the results table, then **enter another path**. The script keeps asking,
+  reusing your answers, until you press **`q`**.
 * Use the **up and down arrows** to recall anything you have already typed this
   session, and the usual line-editing keys to fix a typo.
-* Choose whose permissions to check, and which permission to look for.
-
-The script processes each path and prints the results to the console.
 
 ### Non-interactive
 
@@ -121,6 +127,9 @@ scripts, cron jobs, and CI:
 # Several paths at once
 ./dirPathPerms.sh -P /etc/passwd -P /var/log --who group --perm write
 
+# The full picture: every permission, for every class
+./dirPathPerms.sh --path ~/Documents --all --perm all
+
 # Does the group have write access to every listed path?
 ./dirPathPerms.sh --file paths.txt --who group --perm write
 
@@ -131,9 +140,20 @@ scripts, cron jobs, and CI:
 ./dirPathPerms.sh -w owner -p x paths.txt
 ```
 
-A bare argument is read as a **list of paths** when it is a regular file, and
-**checked directly** when it is a directory. Use `--path` or `--file` when you
-want to be explicit.
+Supplying everything via flags checks once and exits — no session loop — which
+is what makes it usable from cron and CI.
+
+<h3 id="paths-vs-lists">Paths vs. lists</h3>
+
+A bare argument might be the path you want to check, or a file listing paths to
+check. The script decides by **looking inside it**: a file whose first
+meaningful line is a path (starting with `/`, `~`, or `$`) is read as a list;
+anything else is checked directly. So `myPaths.txt` is a list, while
+`/etc/passwd` is checked as a file — rather than having its contents mistaken
+for a list of paths.
+
+Use `--path` or `--file` when you want to say which you meant, instead of
+relying on the guess.
 
 If some (but not all) values are provided, the script prompts for the rest when
 a terminal is attached, or exits with a helpful error when one is not.
@@ -145,8 +165,8 @@ a terminal is attached, or exits with a helpful error when one is not.
 | `-P`, `--path PATH` | Check `PATH` directly. Repeatable. Use instead of `--file` to check one or more paths without writing a list file. |
 | `-f`, `--file FILE` | Input file: one absolute path per line. Blank lines and `#` comments are ignored. |
 | `-w`, `--who WHO` | Whose permission to check: `owner`\|`group`\|`other` (aliases `u`\|`g`\|`o`). |
-| `-p`, `--perm PERM` | Permission to check: `read`\|`write`\|`execute` (aliases `r`\|`w`\|`x`). |
-| `-a`, `--all` | Check owner, group **and** other at once (permission matrix). |
+| `-p`, `--perm PERM` | Permission to check: `read`\|`write`\|`execute`\|`all` (aliases `r`\|`w`\|`x`\|`a`). `all` checks read, write and execute together. |
+| `-a`, `--all` | Check owner, group **and** other at once. |
 | `--no-color` | Disable colored output (also honors the `NO_COLOR` env var). |
 | `-h`, `--help` | Show help and exit. |
 | `-V`, `--version` | Print the version and exit. |
@@ -221,28 +241,49 @@ Let's say you want to check if members of the owning **Group** have **Write** ac
 ```text
 Checking write permission for Group — from myPaths.txt
 
-  /etc/passwd                                   NO  (no write for Group)   [owner rw- | group r-- | other r--]
-  /home/user/important_script.sh                NO  (no write for Group)   [owner rwx | group r-x | other ---]
-  /var/log/app.log                              YES   [owner rw- | group rw- | other ---]
-  /tmp                                          YES   [owner rwx | group rwx | other rwt]
-  /non/existent/path                            SKIP (path does not exist)
-  /data/shared_folder                           YES   [owner rwx | group rwx | other ---]
+┌────────────────────────────────┬───────┬────────────────┐
+│ Path                           │ Group │ Mode           │
+├────────────────────────────────┼───────┼────────────────┤
+│ /etc/passwd                    │  NO   │ -rw-r--r--     │
+│ /home/user/important_script.sh │  NO   │ -rwxr-x---     │
+│ /var/log/app.log               │  YES  │ -rw-rw----     │
+│ /tmp                           │  YES  │ drwxrwxrwt     │
+│ /non/existent/path             │   —   │ does not exist │
+│ /data/shared_folder            │  YES  │ drwxrwx---     │
+└────────────────────────────────┴───────┴────────────────┘
 
 Summary: 3 granted, 2 denied, 1 skipped (5 checked).
 ```
 
-`YES` lines are green, `NO` lines red, and `SKIP` lines yellow (colors are
-omitted when output is piped or `--no-color` is set). With `--all`, each path
-instead shows a per-class matrix, e.g. `u+ g- o-` for a permission present for
-the owner but not the group or other.
+`YES` is green and `NO` is red, and every other row is shaded so neighbouring
+rows never blur together. Colors are omitted when output is piped or
+`--no-color` is set.
+
+With `--all`, each class gets its own column. With `--perm all`, each class
+column becomes an `R  W  X` matrix of check marks:
+
+```text
+┌─────────────────────┬─────────────┬─────────────┬─────────────┬────────────┐
+│                     │    Owner    │    Group    │    Other    │            │
+│ Path                │  R   W   X  │  R   W   X  │  R   W   X  │ Mode       │
+├─────────────────────┼─────────────┼─────────────┼─────────────┼────────────┤
+│ /etc/passwd         │  ✓   ✓   ·  │  ✓   ·   ·  │  ✓   ·   ·  │ -rw-r--r-- │
+│ /var/log            │  ✓   ✓   ✓  │  ✓   ·   ✓  │  ✓   ·   ✓  │ drwxr-xr-x │
+└─────────────────────┴─────────────┴─────────────┴─────────────┴────────────┘
+
+Summary: 2 path(s) checked, 0 skipped — 11 of 18 permission checks granted.
+```
 
 ## Output Explanation
 
-* `YES` (Green): The requested permission (`write` in the example) is set for the specified entity (`Group` in the example) on that path.
-* `NO` (Red): The requested permission is not set for the specified entity. The message clarifies which permission and entity were checked.
-* `[owner ... | group ... | other ...]`: Appears on both `YES` and `NO` lines, showing the actual permission breakdown (`rwx` format) for context.
-* `SKIP ...` (Yellow): Printed when a path listed in the input file does not exist or its mode can't be read.
-* `Summary`: A final tally of granted / denied / skipped paths.
+* **`YES`** (green): the requested permission is set for that class on that path.
+* **`NO`** (red): it is not set.
+* **`✓` / `·`** (with `--perm all`): the permission is, or is not, set.
+* **`Mode`**: the actual mode (`-rw-r--r--`), or why there is no result —
+  `does not exist` or `mode unreadable` (yellow).
+* **`—`**: no result to report for that class, because the mode could not be read.
+* **`Summary`**: a tally of granted / denied / skipped. When more than one class
+  or permission is shown, it counts individual permission checks instead.
 
 ## License
 
